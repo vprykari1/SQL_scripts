@@ -1,0 +1,79 @@
+﻿#Run values : TEST, PROD
+# If execution of scripts is restricted in your machine, set
+# Set-ExecutionPolicy -Scope CurrentUser UnRestricted
+
+# .\job_update.ps1 -Env TEST 
+param(
+	$Env
+	)
+
+
+$ErrorActionPreference = "Stop"
+
+$Path = "C:\Temp\SqlJobs"
+
+If(!(test-path $Path))
+{
+      New-Item -ItemType Directory -Force -Path $Path
+}
+
+
+#Set source sql server
+if($Env -eq "TEST")  {$Instance = ""
+                        $TgtIns = ""}
+if($Env -eq "PROD") {$Instance = ""
+                        $TgtIns = ""}
+
+Remove-Item "$Path\*.*"
+
+#Create sql server and db objects
+[System.Reflection.Assembly]::LoadWithPartialName("Microsoft.SqlServer.Smo") | Out-Null
+$srv = New-Object "Microsoft.SqlServer.Management.Smo.Server" $Instance;
+$TgtSrv = New-Object "Microsoft.SqlServer.Management.Smo.Server" $TgtIns
+
+#Write out the job names
+#$srv.JobServer.jobs|foreach-Object {Write-Host "$_" }
+#Script out the Jobs
+$CurrentDate = get-date -f "yyyy-MM-dd"
+$Instance = $Instance.Replace("\","") + "" + $CurrentDate
+$srv.JobServer.jobs|foreach-Object  {  
+    #script to file
+
+    $script = ""
+    $script = $script + "-- Uninstall the job" + "`r`n"
+    $script = $script + "DECLARE @jobId binary(16)" + "`r`n"
+    $script = $script + "SELECT @jobId = job_id FROM msdb.dbo.sysjobs WHERE (name = N'$_')" + "`r`n"
+    $script = $script + "IF (@jobId IS NOT NULL)" + "`r`n"
+    $script = $script + "BEGIN" + "`r`n"
+    $script = $script + "    EXEC msdb.dbo.sp_delete_job @job_id=@jobId, @delete_unused_schedule=1" + "`r`n"
+    $script = $script + "END" + "`r`n"
+    $script = $script + "GO`r`n"
+    $script = $script + "`r`n"
+    $script = $script + "-- Install the job" + "`r`n"
+    $script = $script + $_.script()
+
+    $script | out-file "$Path\$Instance-$_.sql"
+
+	##replace values in job
+    if ($Env -eq "TEST") {(Get-Content $Path\$Instance-$_.sql).replace('dev', 'test') | Set-Content $Path\$Instance-$_.sql}
+	#escape if needed
+    if ($Env -eq "TEST") {(Get-Content $Path\$Instance-$_.sql) -ireplace [regex]::Escape("dev"), "test" | Set-Content $Path\$Instance-$_.sql}
+  
+    if ($Env -eq "PROD") {(Get-Content $Path\$Instance-$_.sql).replace('test', 'prod') | Set-Content $Path\$Instance-$_.sql}
+    if ($Env -eq "PROD") {(Get-Content $Path\$Instance-$_.sql) -ireplace [regex]::Escape("test"), "prod" | Set-Content $Path\$Instance-$_.sql}
+
+
+    
+
+    ##Invoke-Item $Path\$Instance-$_.sql
+    #Write-Host $TgtSrv " $Path\$Instance-$_.txt"
+    Write-Host "Updating job $_ on $TgtIns"
+    invoke-sqlcmd -inputfile "$Path\$Instance-$_.sql" -serverinstance $TgtIns 
+    Write-Host "$_ Updated!"
+
+}}
+
+
+
+
+
